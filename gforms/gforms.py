@@ -267,10 +267,6 @@ class GForms(commands.Cog):
             upsert=False
         )
 
-    @form_watch.error
-    async def form_watch_error(self, error):
-        raise error
-
     @form_watch.before_loop
     async def watch_before(self):
         await self.bot.wait_until_ready()
