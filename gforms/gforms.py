@@ -109,27 +109,30 @@ async def is_set_up(ctx: commands.Context = None):
 		return True
 
 
-async def validate_channel(ctx: commands.Context, channel_id, check_permissions: bool = True):
+async def validate_channel(ctx: commands.Context, channel: discord.abc.GuildChannel = None, channel_id=None, check_permissions: bool = True):
 	"""Validate a server channel id."""
-	try:
-		channel_id = int(channel_id)
-	except ValueError:
-		await ctx.send("Invalid channel.")
-		return False
-	else:
-		if channel := ctx.guild.get_channel_or_thread(channel_id):
-			if check_permissions:
-				if channel.permissions_for(ctx.guild.me).view_channel and channel.permissions_for(ctx.guild.me).send_messages:
-					return channel
-				else:
-					await ctx.send("I cannot view or send messages in that channel.")
-					return False
-			else:
-				return channel
-
-		else:
+	if channel_id:
+		try:
+			channel_id = int(channel_id)
+		except ValueError:
 			await ctx.send("Invalid channel.")
 			return False
+		else:
+			channel = ctx.guild.get_channel_or_thread(channel_id)
+
+	if channel:
+		if check_permissions:
+			if channel.permissions_for(ctx.guild.me).view_channel and channel.permissions_for(ctx.guild.me).send_messages:
+				return channel
+			else:
+				await ctx.send("I cannot view or send messages in that channel.")
+				return False
+		else:
+			return channel
+
+	else:
+		await ctx.send("Invalid channel.")
+		return False
 
 
 async def send_response(
@@ -140,7 +143,7 @@ async def send_response(
 	destination: Union[discord.abc.GuildChannel, commands.Context],
 ):
 	form = await aiogoogle.as_service_account(service.forms.get(formId=form_id))
-	message = await GFormResponses(form, response).read()
+	message = await GFormResponses(form, response).read(aiogoogle)
 	if isinstance(destination, commands.Context):
 		await message.send(ctx=destination)
 	else:
@@ -169,7 +172,7 @@ class GFormResponses:
 		self._embed = None
 		self._embeds: Union[list | [list]] = []
 
-	async def read(self):
+	async def read(self, aiogoogle):
 		self._embed = Embed(title=self.title, description="", timestamp=self.response_submit_time).set_footer(
 			text=f'Response ID {self.response["responseId"]}'
 		)
@@ -389,7 +392,7 @@ class GFormsPaginatorView(discord.ui.View):
 		self.update_disabled_status()
 		await interaction.response.edit_message(embed=self.pages[self.current], view=self)
 
-	@discord.ui.button(label="<<", disabled=True, style=discord.ButtonStyle.primary)
+	@discord.ui.button(label="<<", disabled=True, style=discord.ButtonStyle.secondary)
 	async def first_callback(self, interaction: discord.Interaction, button: discord.Button):
 		self.current = self.first_page()
 		await self.callback(interaction)
@@ -408,7 +411,7 @@ class GFormsPaginatorView(discord.ui.View):
 		self.current = self.next_page()
 		await self.callback(interaction)
 
-	@discord.ui.button(label=">>", style=discord.ButtonStyle.primary)
+	@discord.ui.button(label=">>", style=discord.ButtonStyle.secondary)
 	async def last_callback(self, interaction: discord.Interaction, button: discord.Button):
 		self.current = self.last_page()
 		await self.callback(interaction)
@@ -476,6 +479,10 @@ class GForms(commands.Cog):
 
 			nextpagetoken = None
 
+			periods = await get_time(task["time"])
+
+			update = {"$set": {"since": periods[0], "when": periods[1]}}
+
 			while True:
 				if responses := await aiog.as_service_account(
 					service.forms.responses.list(
@@ -486,7 +493,9 @@ class GForms(commands.Cog):
 				):
 					try:
 						if nextpagetoken is None:
-							await channel.send(f"**{title}**: Responses since {since.strftime('%c')} :arrow_heading_down:")
+							await channel.send(f"**{title}**: Responses since {since.strftime('%B %m at %H:%M:%S')} :arrow_heading_down:")
+							if "message_id" in task:
+								update["$unset"] = {"message_id": ""}
 						for response in responses["responses"]:
 							await send_response(aiog, service, task["form_id"], response, channel)
 						if "nextPageToken" in responses:
@@ -497,12 +506,17 @@ class GForms(commands.Cog):
 						logger.warning(f"Could not send responses to {channel.name}.")
 						break
 				else:
-					await channel.send(f"**{title}**: No responses have been submitted since {since.strftime('%c')}.")
+					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
+					if "message_id" in task:
+						await channel.get_partial_message(task["message_id"]).edit(
+							content=content
+						)
+					else:
+						msg = await channel.send(content)
+						update["$set"]["message_id"] = msg.id
 					break
 
-		periods = await get_time(task["time"])
-
-		await self.db.update_one({"_id": task["_id"]}, {"$set": {"since": periods[0], "when": periods[1]}}, upsert=False)
+		await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
 
 	@form_watch.before_loop
 	async def watch_before(self):
@@ -572,9 +586,9 @@ class GForms(commands.Cog):
 				Embed(
 					title="Tutorial",
 					description=(
-						"Welcome to `gforms`!"
-						"\n\nThis is a plugin for the Modmail Discord bot that aims to add some Google Forms interaction to your server *(p.s.: the API sucks, so there's not much)*."
-						"\n\nSee the other pages for how to get started."
+						"Welcome to `gforms`!\n\nThis is a plugin for the Modmail Discord bot that aims to add some Google Forms"
+						" interaction to your server *(p.s.: the API sucks, so there's not much)*.\n\nSee the other pages for how to get"
+						" started."
 					),
 				),
 				Embed(
@@ -626,14 +640,19 @@ class GForms(commands.Cog):
 
 			await paginator.run()
 
-	@gforms.command(brief="Watch a form for responses.", usage="<channel id> <form id> <hour:minutes>")
+	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes> <channel id>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def watch(self, ctx: commands.Context, channel_id, form_id: str, *, time: str):
+	async def watch(self, ctx: commands.Context, form_id: str, time: str, channel_id=None):
 		"""Set a watch for a Google Form, sending all responses for that form since creating the watch every day at a specified hour (UTC, 24-hour).
 
-		Setting a watch on a form already in a channel will update the time."""
+		Channel ID uses the current channel if not provided. Setting a watch on a form already in a channel will update the time."""
 		if await is_set_up(ctx):
-			if channel := await validate_channel(ctx, channel_id):
+			if channel_id:
+				channel = await validate_channel(ctx, channel_id=channel_id)
+			else:
+				channel = await validate_channel(ctx, channel=ctx.channel)
+
+			if channel:
 				try:
 					time = datetime.datetime.strptime(time, "%H:%M")
 				except ValueError:
@@ -647,7 +666,9 @@ class GForms(commands.Cog):
 					periods = await get_time(time)
 
 					if await self.db.find_one({"channel_id": channel.id, "form_id": form_id}, {"_id": 0}):
-						await self.db.update_one({"form_id": form_id, "channel_id": channel.id}, {"$set": {"time": time, "when": periods[1]}})
+						await self.db.update_one(
+							{"form_id": form_id, "channel_id": channel.id}, {"$set": {"time": time, "when": periods[1]}}
+						)
 					else:
 						await self.db.insert_one(
 							{
@@ -669,16 +690,24 @@ class GForms(commands.Cog):
 
 	@gforms.command(brief="Remove a form watch.", usage="<form id> <channel id>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def unwatch(self, ctx: commands.Context, channel_id, form_id: str):
-		"""Remove a watch for a Google Form."""
-		if validate_channel(ctx, channel_id, check_permissions=False):
-			result = await self.db.delete_one({"channel_id": channel_id, "form_id": form_id})
-			if result.deleted_count > 0:
-				if self.form_watch.is_running():
-					self.form_watch.restart()
-				return await self.bot.add_reaction(ctx.message, "✅")
+	async def unwatch(self, ctx: commands.Context, form_id: str, channel_id=None):
+		"""Remove a watch for a Google Form.
+		
+		Channel ID uses the current channel if not provided."""
+		if await is_set_up(ctx):
+			if channel_id:
+				channel = channel_id
 			else:
-				return await ctx.send("No watch for that form in that channel.")
+				channel = ctx.channel.id
+
+			if channel:
+				result = await self.db.delete_one({"channel_id": channel, "form_id": form_id})
+				if result.deleted_count > 0:
+					if self.form_watch.is_running():
+						self.form_watch.restart()
+					return await self.bot.add_reaction(ctx.message, "✅")
+				else:
+					return await ctx.send("No watch for that form in that channel.")
 
 	@gforms.command()
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
@@ -696,7 +725,7 @@ class GForms(commands.Cog):
 								f" (`{watch['channel_id']}`)\n - **Time**: {watch['time']}"
 								for watch in li
 							]
-						),
+						)
 					).set_author(icon_url=ctx.guild.icon.url, name="Form watches")
 					embeds.append(embed)
 
@@ -710,7 +739,9 @@ class GForms(commands.Cog):
 	async def reset(self, ctx):
 		"""Reset gforms."""
 		if await is_set_up(ctx):
-			if await confirmation(ctx, "### Are you sure you want to reset `gforms`?\n\nThis will delete your provided `.json` and watches."):
+			if await confirmation(
+				ctx, "### Are you sure you want to reset `gforms`?\n\nThis will delete your provided `.json` and watches."
+			):
 				os.remove(KEY_FILE)
 				self.db.drop()
 				await self.bot.add_reaction(ctx.message, "✅")
@@ -720,7 +751,7 @@ class GForms(commands.Cog):
 	class ResponsesFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
 		limit: Union[int, None] = commands.flag(name="limit", aliases=["lim"], description="Only post these amount of responses")
 		number: Union[int, None] = commands.flag(name="number", aliases=["num"], description="Only get the response in this position")
-		time: str = commands.flag(name="time", description="Show only responses posted at and after this time")
+		time: Union[str, None] = commands.flag(name="time", description="Show only responses posted at and after this time")
 
 	@gforms.command()
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
@@ -741,7 +772,7 @@ class GForms(commands.Cog):
 						service.forms.responses.list(
 							formId=form_id,
 							pageSize=flags.limit if flags else None,
-							filter=f"timestamp >= {flags.time}" if flags else None,
+							filter=f"timestamp >= {flags.time}" if flags and flags.time else None,
 							nextpagetoken=nextpagetoken,
 						)
 					):
@@ -777,8 +808,8 @@ class GForms(commands.Cog):
 			if isinstance(error.original, aiogoogle.HTTPError):
 				if "invalid_grant" in error.original.res.reason:
 					await ctx.send(
-						"The service account seems to be invalid... The stored json will be deleted. Use `?gforms setup` and use a key for a"
-						" new acccount."
+						"The service account seems to be invalid... The stored json will be deleted. Use `?gforms setup` and use a key for"
+						" a new acccount."
 					)
 					if self.form_watch.is_running():
 						self.form_watch.cancel()
