@@ -2,7 +2,7 @@ import datetime
 import json
 import os
 import re
-from typing import Union, List
+from typing import Union, List, Tuple
 
 import aiofiles
 import aiogoogle
@@ -74,6 +74,21 @@ class ConfirmView(discord.ui.View):
 		self.stop()
 
 
+class ServiceEmailView(discord.ui.View):
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+
+	async def interaction_check(self, interaction: discord.Interaction):
+		return interaction.user.id == ctx.author.id
+
+	@discord.ui.button(label="Show", style=discord.ButtonStyle.primary)
+	async def show(self, interaction: discord.Interaction, button):
+		async with aiofiles.open(KEY_FILE, mode="r") as f:
+			sa_json = await f.read()
+			sa_json = json.loads(sa_json)
+		return await interaction.response.send_message(sa_json["client_email"], ephemeral=True)
+
+
 async def confirmation(ctx: discord.ext.commands.Context, message: str):
 	"""Send a confirmation message with Y/N buttons.
 	:param ctx: Command context.
@@ -109,7 +124,7 @@ async def is_set_up(ctx: commands.Context = None):
 		return True
 
 
-async def validate_channel(ctx: commands.Context, channel: discord.abc.GuildChannel = None, channel_id=None, check_permissions: bool = True):
+async def validate_channel(ctx: commands.Context, channel_id=None, check_permissions: bool = True):
 	"""Validate a server channel id."""
 	if channel_id:
 		try:
@@ -119,6 +134,8 @@ async def validate_channel(ctx: commands.Context, channel: discord.abc.GuildChan
 			return False
 		else:
 			channel = ctx.guild.get_channel_or_thread(channel_id)
+	else:
+		channel = ctx.channel
 
 	if channel:
 		if check_permissions:
@@ -493,7 +510,10 @@ class GForms(commands.Cog):
 				):
 					try:
 						if nextpagetoken is None:
-							await channel.send(f"**{title}**: Responses since {since.strftime('%B %m at %H:%M:%S')} :arrow_heading_down:")
+							content = f"**{title}**: Responses since {since.strftime('%B %m at %-H:%M:%S')} :arrow_heading_down:"
+							if "pings" in task:
+								content = f'{",".join(task["pings"])}\n{content}'
+							await channel.send(content)
 							if "message_id" in task:
 								update["$unset"] = {"message_id": ""}
 						for response in responses["responses"]:
@@ -506,11 +526,9 @@ class GForms(commands.Cog):
 						logger.warning(f"Could not send responses to {channel.name}.")
 						break
 				else:
-					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
+					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %-H:%M:%S')}."
 					if "message_id" in task:
-						await channel.get_partial_message(task["message_id"]).edit(
-							content=content
-						)
+						await channel.get_partial_message(task["message_id"]).edit(content=content)
 					else:
 						msg = await channel.send(content)
 						update["$set"]["message_id"] = msg.id
@@ -537,7 +555,9 @@ class GForms(commands.Cog):
 	async def gforms(self, ctx):
 		"""Base group for gforms' commands.
 
-		Some commands will require a form ID, which can be found in the url of a Google Form (e.g. `https://docs.google.com/forms/d/<ID HERE>/`)
+		Some commands will require a form ID, which can be found in the url of a Google Form. (e.g. `https://docs.google.com/forms/d/<ID HERE>/`)
+
+		Commands with flags have "-" as the prefix. (e.g. "-name arg -name arg")
 		"""
 
 	@gforms.command(brief="Set up gforms.")
@@ -640,17 +660,25 @@ class GForms(commands.Cog):
 
 			await paginator.run()
 
+	class WatchFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
+		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="Channel")
+		ping: Tuple[discord.Member, discord.Role] = commands.flag(name="ping", description="A role to ping")
+
 	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes> <channel id>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def watch(self, ctx: commands.Context, form_id: str, time: str, channel_id=None):
+	async def watch(self, ctx: commands.Context, form_id: str, time: str, *, flags: WatchFlags = None):
 		"""Set a watch for a Google Form, sending all responses for that form since creating the watch every day at a specified hour (UTC, 24-hour).
 
-		Channel ID uses the current channel if not provided. Setting a watch on a form already in a channel will update the time."""
+		Setting a watch on a form already in a channel will update the other settings.
+		### Flags
+		- `channel/ch` - The channel to send responses to. Uses the current channel if not provided.
+		- `ping` - Roles or users to ping if there are resposnes.
+		"""
 		if await is_set_up(ctx):
-			if channel_id:
+			if flags and flags.channel:
 				channel = await validate_channel(ctx, channel_id=channel_id)
 			else:
-				channel = await validate_channel(ctx, channel=ctx.channel)
+				channel = await validate_channel(ctx)
 
 			if channel:
 				try:
@@ -666,20 +694,23 @@ class GForms(commands.Cog):
 					periods = await get_time(time)
 
 					if await self.db.find_one({"channel_id": channel.id, "form_id": form_id}, {"_id": 0}):
-						await self.db.update_one(
-							{"form_id": form_id, "channel_id": channel.id}, {"$set": {"time": time, "when": periods[1]}}
-						)
+						params = {"$set": {"time": time, "when": periods[1]}}
+						if flags and flags.ping:
+							params["$set"]["pings"] = [mentionable.mention for mentionable in flags.ping]
+						await self.db.update_one({"form_id": form_id, "channel_id": channel.id}, params)
+
 					else:
-						await self.db.insert_one(
-							{
-								"form_title": form["info"].get("title", form["info"]["documentTitle"]),
-								"form_id": form_id,
-								"channel_id": channel.id,
-								"time": time,
-								"since": periods[0],
-								"when": periods[1],
-							}
-						)
+						params = {
+							"form_title": form["info"].get("title", form["info"]["documentTitle"]),
+							"form_id": form_id,
+							"channel_id": channel.id,
+							"time": time,
+							"since": periods[0],
+							"when": periods[1],
+						}
+						if flags and flags.ping:
+							params["pings"] = [mentionable.mention for mentionable in flags.ping]
+						await self.db.insert_one(params)
 
 					if self.form_watch.is_running():
 						self.form_watch.restart()
@@ -692,7 +723,7 @@ class GForms(commands.Cog):
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
 	async def unwatch(self, ctx: commands.Context, form_id: str, channel_id=None):
 		"""Remove a watch for a Google Form.
-		
+
 		Channel ID uses the current channel if not provided."""
 		if await is_set_up(ctx):
 			if channel_id:
@@ -757,9 +788,11 @@ class GForms(commands.Cog):
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
 	async def responses(self, ctx: commands.Context, form_id, *, flags: ResponsesFlags = None):
 		"""Show the responses a form has.
-
-		The `time` flag should be formatted as `YYYY-MM-DDTHH:MM:SSZ`.
-		Example: 2014-10-02T15:01:23Z"""
+		### Flags
+		- `limit/lim` - Only post these amount of responses
+		- `number/num` - Only get the response in this position
+		- `time` - Show only responses posted at and after this time. Should be formatted as `YYYY-MM-DDTHH:MM:SSZ`. (e.g. 2014-10-02T15:01:23Z)
+		"""
 		if await is_set_up(ctx):
 			nextpagetoken = None
 
@@ -801,6 +834,13 @@ class GForms(commands.Cog):
 				if flags.number:
 					return await ctx.send("This form does not have responses up to that number.")
 
+	@gforms.command()
+	@checks.has_permissions(checks.PermissionLevel.OWNER)
+	async def serviceemail(self, ctx):
+		"""Show your service account's email."""
+		if await is_set_up(ctx):
+			await ctx.send(view=ServiceEmailView())
+
 	async def cog_command_error(self, ctx: commands.Context, error):
 		if isinstance(error, commands.MissingRequiredArgument):
 			return
@@ -816,7 +856,10 @@ class GForms(commands.Cog):
 					os.remove(KEY_FILE)
 					self.creds = None
 				elif "The caller does not have permission" in error.original.res.reason:
-					await ctx.send("The provided service account does not have access to this form or the permissions needed...")
+					await ctx.send(
+						"The provided service account does not have access to this form or the permissions needed...\nYou can show the"
+						" email here for convenience."
+					)
 				elif "Requested entity was not found" in error.original.res.reason:
 					await ctx.send("Invalid form ID.")
 				elif "invalid timestamp" in error.original.res.reason:
