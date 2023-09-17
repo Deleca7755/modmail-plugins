@@ -526,7 +526,7 @@ class GForms(commands.Cog):
 						logger.warning(f"Could not send responses to {channel.name}.")
 						break
 				else:
-					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %-H:%M:%S')}."
+					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %#m at %#H:%M:%S')}."
 					if "message_id" in task:
 						await channel.get_partial_message(task["message_id"]).edit(content=content)
 					else:
