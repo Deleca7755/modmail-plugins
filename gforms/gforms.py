@@ -2,19 +2,22 @@ import datetime
 import json
 import os
 import re
-from typing import Union, List, Tuple
+from typing import Union, Tuple
 
 import aiofiles
 import aiogoogle
 import aiogoogle.auth
 import discord
 import jsonschema
-from pymongo import DeleteOne
 import motor.core
 from discord.ext import commands, tasks
 
 from bot import ModmailBot, checks
 from core import paginator as pages, models
+
+# TODO:
+# - Add "?gforms form" command basically only for question Item IDs
+# - Add the option to exclude posting specific answers
 
 KEY_FILE = "service_account_key.json"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -75,11 +78,12 @@ class ConfirmView(discord.ui.View):
 
 
 class ServiceEmailView(discord.ui.View):
-	def __init__(self, *args, **kwargs):
+	def __init__(self, author_id, *args, **kwargs):
+		self.author = author_id
 		super().__init__(*args, **kwargs)
 
 	async def interaction_check(self, interaction: discord.Interaction):
-		return interaction.user.id == ctx.author.id
+		return interaction.user.id == self.author
 
 	@discord.ui.button(label="Show", style=discord.ButtonStyle.primary)
 	async def show(self, interaction: discord.Interaction, button):
@@ -662,11 +666,11 @@ class GForms(commands.Cog):
 
 	class WatchFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
 		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="Channel")
-		ping: Tuple[discord.Member, discord.Role] = commands.flag(name="ping", description="A role to ping")
+		ping: Tuple[Union[discord.Member, discord.Role]] = commands.flag(name="ping", description="A role to ping")
 
-	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes> <channel id>")
+	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def watch(self, ctx: commands.Context, form_id: str, time: str, *, flags: WatchFlags = None):
+	async def watch(self, ctx: commands.Context, form_id: str = None, time: str = None, *, flags: WatchFlags = None):
 		"""Set a watch for a Google Form, sending all responses for that form since creating the watch every day at a specified hour (UTC, 24-hour).
 
 		Setting a watch on a form already in a channel will update the other settings.
@@ -681,6 +685,10 @@ class GForms(commands.Cog):
 				channel = await validate_channel(ctx)
 
 			if channel:
+				if not form_id:
+					return await ctx.send("Please provide the ID of the form.")
+				if not time:
+					return await ctx.send("Please a time for responses to be posted (H:M in UTC 24h).")
 				try:
 					time = datetime.datetime.strptime(time, "%H:%M")
 				except ValueError:
@@ -836,10 +844,10 @@ class GForms(commands.Cog):
 
 	@gforms.command()
 	@checks.has_permissions(checks.PermissionLevel.OWNER)
-	async def serviceemail(self, ctx):
+	async def serviceemail(self, ctx: commands.Context):
 		"""Show your service account's email."""
 		if await is_set_up(ctx):
-			await ctx.send(view=ServiceEmailView())
+			await ctx.send(view=ServiceEmailView(ctx.author.id))
 
 	async def cog_command_error(self, ctx: commands.Context, error):
 		if isinstance(error, commands.MissingRequiredArgument):
