@@ -16,8 +16,9 @@ from bot import ModmailBot, checks
 from core import paginator as pages, models
 
 # TODO:
-# - Add "?gforms form" command basically only for question Item IDs
+# - Add "?gforms form" command basically only for getting question Item IDs
 # - Add the option to exclude posting specific answers
+# - Toggle whether questions with no answers are shown or not
 
 KEY_FILE = "service_account_key.json"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -496,49 +497,50 @@ class GForms(commands.Cog):
 			service = await aiog.discover("forms", "v1", disco_doc_ver=2)
 			_form = await aiog.as_service_account(service.forms.get(formId=task["form_id"]))
 			title = task["form_title"]
-			channel = self.bot.get_channel(task["channel_id"])
+			if channel := self.bot.get_channel(task["channel_id"]):
+				nextpagetoken = None
 
-			nextpagetoken = None
+				periods = await get_time(task["time"])
 
-			periods = await get_time(task["time"])
+				update = {"$set": {"since": periods[0], "when": periods[1]}}
 
-			update = {"$set": {"since": periods[0], "when": periods[1]}}
-
-			while True:
-				if responses := await aiog.as_service_account(
-					service.forms.responses.list(
-						formId=task["form_id"],
-						filter=f"timestamp >= {since.isoformat().replace('+00:00', 'Z')}",
-						nextPageToken=nextpagetoken,
-					)
-				):
-					try:
-						if nextpagetoken is None:
-							content = f"**{title}**: Responses since {since.strftime('%B %m at %-H:%M:%S')} :arrow_heading_down:"
-							if "pings" in task:
-								content = f'{",".join(task["pings"])}\n{content}'
-							await channel.send(content)
-							if "message_id" in task:
-								update["$unset"] = {"message_id": ""}
-						for response in responses["responses"]:
-							await send_response(aiog, service, task["form_id"], response, channel)
-						if "nextPageToken" in responses:
-							nextpagetoken = responses["nextPageToken"]
-						else:
+				while True:
+					if responses := await aiog.as_service_account(
+						service.forms.responses.list(
+							formId=task["form_id"],
+							filter=f"timestamp >= {since.isoformat().replace('+00:00', 'Z')}",
+							nextPageToken=nextpagetoken,
+						)
+					):
+						try:
+							if nextpagetoken is None:
+								content = f"**{title}**: Responses since {since.strftime('%B %m at %-H:%M:%S')} :arrow_heading_down:"
+								if "pings" in task:
+									content = f'{",".join(task["pings"])}\n{content}'
+								await channel.send(content)
+								if "message_id" in task:
+									update["$unset"] = {"message_id": ""}
+							for response in responses["responses"]:
+								await send_response(aiog, service, task["form_id"], response, channel)
+							if "nextPageToken" in responses:
+								nextpagetoken = responses["nextPageToken"]
+							else:
+								break
+						except discord.Forbidden:
+							logger.warning(f"Could not send responses to {channel.name}.")
 							break
-					except discord.Forbidden:
-						logger.warning(f"Could not send responses to {channel.name}.")
-						break
-				else:
-					content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
-					if "message_id" in task:
-						await channel.get_partial_message(task["message_id"]).edit(content=content)
 					else:
-						msg = await channel.send(content)
-						update["$set"]["message_id"] = msg.id
-					break
-
-		await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
+						content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
+						if "message_id" in task:
+							await channel.get_partial_message(task["message_id"]).edit(content=content)
+						else:
+							msg = await channel.send(content)
+							update["$set"]["message_id"] = msg.id
+						break
+				await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
+			else:
+				logger.warning(f"A channel assigned to a watch ({task['channel_id']}) seems to no longer exist. The watch will be removed.")
+				await self.db.delete_one({"_id": task["_id"]})
 
 	@form_watch.before_loop
 	async def watch_before(self):
@@ -676,7 +678,7 @@ class GForms(commands.Cog):
 		Setting a watch on a form already in a channel will update the other settings.
 		### Flags
 		- `channel/ch` - The channel to send responses to. Uses the current channel if not provided.
-		- `ping` - Roles or users to ping if there are resposnes.
+		- `ping` - Roles or users to ping if there are responses.
 		"""
 		if await is_set_up(ctx):
 			if flags and flags.channel:
