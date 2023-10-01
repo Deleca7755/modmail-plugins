@@ -668,7 +668,7 @@ class GForms(commands.Cog):
 
 	class WatchFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
 		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="Channel")
-		ping: Tuple[Union[discord.Member, discord.Role]] = commands.flag(name="ping", description="A role to ping")
+		ping: Tuple[Union[discord.Member, discord.Role, None]] = commands.flag(name="ping", description="A role to ping")
 
 	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
