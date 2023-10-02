@@ -695,7 +695,7 @@ class GForms(commands.Cog):
 		if await is_set_up(ctx):
 			now = datetime.datetime.now(datetime.timezone.utc)
 			if flags and flags.channel:
-				channel = await validate_channel(ctx, channel_id=channel_id)
+				channel = await validate_channel(ctx, channel_id=flags.channel.id)
 			else:
 				channel = ctx.channel
 
