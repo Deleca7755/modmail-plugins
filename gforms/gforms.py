@@ -680,7 +680,7 @@ class GForms(commands.Cog):
 		time: Union[str, None] = commands.flag(name="time", description="Time to wait until the first check")
 		ping: Union[Tuple[discord.Member, discord.Role], None] = commands.flag(name="ping", description="A role to ping")
 
-	@gforms.command(brief="Watch a form for responses.", usage="<form id>")
+	@gforms.command(brief="Watch a form for responses.", usage="<form_id>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
 	async def watch(self, ctx: commands.Context, form_id: str = None, *, flags: WatchFlags = None):
 		"""Set a watch for a Google Form, sending all responses for that form since creating the watch at your specified time.
