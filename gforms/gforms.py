@@ -734,6 +734,8 @@ class GForms(commands.Cog):
 							params["$set"]["pings"] = pings
 						if "time" in watch:
 							params["$unset"] = {"time": ""}
+						if "guild" not in watch:
+							params["$set"]["guild"] = ctx.guild.id
 
 						await self.db.update_one({"_id": watch["_id"]}, params)
 
