@@ -165,7 +165,7 @@ async def send_response(
 	destination: Union[discord.abc.GuildChannel, commands.Context],
 ):
 	form = await aiogoogle.as_service_account(service.forms.get(formId=form_id))
-	message = await GFormResponses(form, response).read(aiogoogle)
+	message = await GFormResponses(form, response).read()
 	if isinstance(destination, commands.Context):
 		await message.send(ctx=destination)
 	else:
@@ -194,7 +194,7 @@ class GFormResponses:
 		self._embed = None
 		self._embeds: Union[list | [list]] = []
 
-	async def read(self, aiogoogle):
+	async def read(self):
 		self._embed = Embed(title=self.title, description="", timestamp=self.response_submit_time).set_footer(
 			text=f'Response ID {self.response["responseId"]}'
 		)
