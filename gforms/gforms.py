@@ -541,7 +541,7 @@ class GForms(commands.Cog):
 							update["$set"]["message_id"] = msg.id
 						break
 				if "guild" not in task:
-					update["guild"] = channel.guild.id
+					update["$set"]["guild"] = channel.guild.id
 				await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
 			else:
 				logger.warning(
