@@ -544,10 +544,10 @@ class GForms(commands.Cog):
 					update["$set"]["guild"] = channel.guild.id
 				await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
 			else:
-				logger.warning(
-					f"{channel.guild.name}: A channel assigned to a watch ({channel.name}) seems to no longer exist. The watch will be"
-					" removed."
-				)
+				if "guild" in task:
+					logger.warning(f"{self.bot.get_guild(task['guild']).name}: A channel assigned to a watch ({task['channel_id']}) seems to no longer exist. The watch will be removed.")
+				else:
+					logger.warning(f"A channel assigned to a watch ({task['channel_id']}) seems to no longer exist. The watch will be removed.")
 				await self.db.delete_one({"_id": task["_id"]})
 
 	@form_watch.before_loop
