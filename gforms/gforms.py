@@ -106,18 +106,18 @@ async def confirmation(ctx: discord.ext.commands.Context, message: str):
 	return view.value
 
 
-async def get_time(time: str):
+async def get_time(time: str, now: datetime.datetime = None):
 	"""Get a form watch time.
 	:param time: The time (hour and minute) to use for the calculation.
+	:param now: The current time.
 	:return: (datetime, datetime)
 	"""
-	now = datetime.datetime.now(datetime.timezone.utc)
-	when = datetime.datetime.strptime(f"{datetime.datetime.now(datetime.timezone.utc).date()} {time}", "%Y-%m-%d %H:%M:%S").replace(
-		tzinfo=datetime.timezone.utc
-	)
+	if not now:
+		now = datetime.datetime.now(datetime.timezone.utc)
+	when = datetime.datetime.strptime(f"{now.date()} {time}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc)
 	if when < datetime.datetime.now(datetime.timezone.utc):
 		when = when + datetime.timedelta(days=1)
-	return now, when
+	return when
 
 
 async def is_set_up(ctx: commands.Context = None):
@@ -498,11 +498,14 @@ class GForms(commands.Cog):
 			_form = await aiog.as_service_account(service.forms.get(formId=task["form_id"]))
 			title = task["form_title"]
 			if channel := self.bot.get_channel(task["channel_id"]):
+				now = datetime.datetime.now(datetime.timezone.utc)
+
 				nextpagetoken = None
 
-				periods = await get_time(task["time"])
-
-				update = {"$set": {"since": periods[0], "when": periods[1]}}
+				if "hours" in task:
+					update = {"$set": {"since": now, "when": task["when"] + datetime.timedelta(hours=task["hours"])}}
+				else:
+					update = {"$set": {"since": now, "when": await get_time(task["when"])}}
 
 				while True:
 					if responses := await aiog.as_service_account(
@@ -514,7 +517,7 @@ class GForms(commands.Cog):
 					):
 						try:
 							if nextpagetoken is None:
-								content = f"**{title}**: Responses since {since.strftime('%B %m at %-H:%M:%S')} :arrow_heading_down:"
+								content = f"**{title}**: Responses since {since.strftime('%B %m at %H:%M:%S')} :arrow_heading_down:"
 								if "pings" in task:
 									content = f'{",".join(task["pings"])}\n{content}'
 								await channel.send(content)
@@ -527,7 +530,7 @@ class GForms(commands.Cog):
 							else:
 								break
 						except discord.Forbidden:
-							logger.warning(f"Could not send responses to {channel.name}.")
+							logger.warning(f"{channel.guild.name}: Could not send responses to {channel.name}.")
 							break
 					else:
 						content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
@@ -537,9 +540,14 @@ class GForms(commands.Cog):
 							msg = await channel.send(content)
 							update["$set"]["message_id"] = msg.id
 						break
+				if "guild" not in task:
+					update["guild"] = channel.guild.id
 				await self.db.update_one({"_id": task["_id"]}, update, upsert=False)
 			else:
-				logger.warning(f"A channel assigned to a watch ({task['channel_id']}) seems to no longer exist. The watch will be removed.")
+				logger.warning(
+					f"{channel.guild.name}: A channel assigned to a watch ({channel.name}) seems to no longer exist. The watch will be"
+					" removed."
+				)
 				await self.db.delete_one({"_id": task["_id"]})
 
 	@form_watch.before_loop
@@ -685,6 +693,7 @@ class GForms(commands.Cog):
 		- `time` - The initial time to **start** at (UTC, 24-hour). For example, you might pass `1` to `hours`, but want it to actually check on an exact hour or otherwise. Use this flag if so.
 		"""
 		if await is_set_up(ctx):
+			now = datetime.datetime.now(datetime.timezone.utc)
 			if flags and flags.channel:
 				channel = await validate_channel(ctx, channel_id=channel_id)
 			else:
@@ -693,34 +702,50 @@ class GForms(commands.Cog):
 			if channel:
 				if not form_id:
 					return await ctx.send("Please provide the ID of the form.")
-				if not time:
-					return await ctx.send("Please a time for responses to be posted (H:M in UTC 24h).")
-				try:
-					time = datetime.datetime.strptime(time, "%H:%M")
-				except ValueError:
-					return await ctx.send("Invalid time (should be an hour and minute in 24-hour UTC).")
+				if not flags or flags and not flags.hours:
+					return await ctx.send("Please provide a period for responses to be posted with the `hours` flag.")
+
+				if not flags.time:
+					time = (now + datetime.timedelta(hours=flags.hours)).strftime("%H:%M:%S")
 				else:
-					time = str(time.time())
+					try:
+						time = datetime.datetime.strptime(flags.time, "%H:%M")
+						time = str(time.time())
+					except ValueError:
+						return await ctx.send("Invalid time (should be an hour and minute in 24-hour UTC).")
+
+				when = await get_time(time, now)
 
 				async with aiogoogle.Aiogoogle(service_account_creds=self.creds) as aiog:
 					service = await aiog.discover("forms", "v1", disco_doc_ver=2)
 					form = await aiog.as_service_account(service.forms.get(formId=form_id))
-					periods = await get_time(time)
-
-					if await self.db.find_one({"channel_id": channel.id, "form_id": form_id}, {"_id": 0}):
-						params = {"$set": {"time": time, "when": periods[1]}}
+					if watch := await self.db.find_one({"channel_id": channel.id, "form_id": form_id}):
+						params = {"$set": {"hours": flags.hours, "when": when}}
 						if flags and flags.ping:
-							params["$set"]["pings"] = [mentionable.mention for mentionable in flags.ping]
-						await self.db.update_one({"form_id": form_id, "channel_id": channel.id}, params)
+							# I hate flags sometimes
+							pings = []
+							ping = ""
+							for char in flags.ping:
+								if char != "":
+									ping = ping + char
+								else:
+									pings.append(ping)
+									ping = ""
+							params["$set"]["pings"] = pings
+						if "time" in watch:
+							params["$unset"] = {"time": ""}
+
+						await self.db.update_one({"_id": watch["_id"]}, params)
 
 					else:
 						params = {
+							"guild": ctx.guild.id,
 							"form_title": form["info"].get("title", form["info"]["documentTitle"]),
 							"form_id": form_id,
 							"channel_id": channel.id,
-							"time": time,
-							"since": periods[0],
-							"when": periods[1],
+							"hours": flags.hours,
+							"since": now,
+							"when": when,
 						}
 						if flags and flags.ping:
 							params["pings"] = [mentionable.mention for mentionable in flags.ping]
