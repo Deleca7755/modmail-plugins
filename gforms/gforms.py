@@ -688,7 +688,7 @@ class GForms(commands.Cog):
 			if flags and flags.channel:
 				channel = await validate_channel(ctx, channel_id=channel_id)
 			else:
-				channel = await validate_channel(ctx)
+				channel = ctx.channel
 
 			if channel:
 				if not form_id:
