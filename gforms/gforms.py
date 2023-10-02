@@ -675,7 +675,7 @@ class GForms(commands.Cog):
 			await paginator.run()
 
 	class WatchFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
-		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="The channel")
+		channel: Union[discord.TextChannel, int, None] = commands.flag(name="channel", aliases=["ch"], description="The channel")
 		hours: Union[int, float, None] = commands.flag(name="hours", description="How many hours to wait until checking")
 		time: Union[str, None] = commands.flag(name="time", description="Time to wait until the first check")
 		ping: Union[Tuple[discord.Member, discord.Role], None] = commands.flag(name="ping", description="A role to ping")
