@@ -667,18 +667,22 @@ class GForms(commands.Cog):
 			await paginator.run()
 
 	class WatchFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
-		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="Channel")
-		ping: Tuple[Union[discord.Member, discord.Role, None]] = commands.flag(name="ping", description="A role to ping")
+		channel: Union[int, None] = commands.flag(name="channel", aliases=["ch"], description="The channel")
+		hours: Union[int, float, None] = commands.flag(name="hours", description="How many hours to wait until checking")
+		time: Union[str, None] = commands.flag(name="time", description="Time to wait until the first check")
+		ping: Union[Tuple[discord.Member, discord.Role], None] = commands.flag(name="ping", description="A role to ping")
 
-	@gforms.command(brief="Watch a form for responses.", usage="<form id> <hour:minutes>")
+	@gforms.command(brief="Watch a form for responses.", usage="<form id>")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def watch(self, ctx: commands.Context, form_id: str = None, time: str = None, *, flags: WatchFlags = None):
-		"""Set a watch for a Google Form, sending all responses for that form since creating the watch every day at a specified hour (UTC, 24-hour).
+	async def watch(self, ctx: commands.Context, form_id: str = None, *, flags: WatchFlags = None):
+		"""Set a watch for a Google Form, sending all responses for that form since creating the watch at your specified time.
 
 		Setting a watch on a form already in a channel will update the other settings.
 		### Flags
 		- `channel/ch` - The channel to send responses to. Uses the current channel if not provided.
 		- `ping` - Roles or users to ping if there are responses.
+		- `hours` - How long to wait between checks. For example, passing `1` would check every hour, passing `12` would check twice a day. Values like `0.5` also work.
+		- `time` - The initial time to **start** at (UTC, 24-hour). For example, you might pass `1` to `hours`, but want it to actually check on an exact hour or otherwise. Use this flag if so.
 		"""
 		if await is_set_up(ctx):
 			if flags and flags.channel:
