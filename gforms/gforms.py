@@ -517,7 +517,7 @@ class GForms(commands.Cog):
 					):
 						try:
 							if nextpagetoken is None:
-								content = f"**{title}**: Responses since {since.strftime('%B %m at %H:%M:%S')} :arrow_heading_down:"
+								content = f"**{title}**: Responses since {since.strftime('%B %d at %H:%M:%S')} :arrow_heading_down:"
 								if "pings" in task:
 									content = f'{",".join(task["pings"])}\n{content}'
 								await channel.send(content)
@@ -533,7 +533,7 @@ class GForms(commands.Cog):
 							logger.warning(f"{channel.guild.name}: Could not send responses to {channel.name}.")
 							break
 					else:
-						content = f"**{title}**: No responses have been submitted since {since.strftime('%B %m at %H:%M:%S')}."
+						content = f"**{title}**: No responses have been submitted since {since.strftime('%B %d at %H:%M:%S')}."
 						if "message_id" in task:
 							await channel.get_partial_message(task["message_id"]).edit(content=content)
 						else:
