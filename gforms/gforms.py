@@ -755,7 +755,7 @@ class GForms(commands.Cog):
 	async def watches(self, ctx: commands.Context):
 		"""List all the form watches for the server."""
 		if await is_set_up(ctx):
-			watches = await self.db.find({}, {"_id": False}).to_list(None)
+			watches = await self.db.find({"guild": ctx.guild.id}, {"_id": False}).to_list(None)
 			embeds = []
 			if watches:
 				for li in listsplit(5, watches):
@@ -773,7 +773,7 @@ class GForms(commands.Cog):
 				paginator = GFormsPaginator(ctx, *embeds)
 				await paginator.run()
 			else:
-				return await ctx.send("No watches set up! Use `?gforms watch` to set a watch for a form.")
+				return await ctx.send("No watches set up in this server! Use `?gforms watch` to set a watch for a form.")
 
 	@gforms.command()
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
@@ -816,7 +816,7 @@ class GForms(commands.Cog):
 							formId=form_id,
 							pageSize=flags.limit if flags else None,
 							filter=f"timestamp >= {flags.time}" if flags and flags.time else None,
-							nextpagetoken=nextpagetoken,
+							nextPageToken=nextpagetoken,
 						)
 					):
 						for i, response in enumerate(responses["responses"], start=1):
