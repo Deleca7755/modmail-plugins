@@ -505,7 +505,7 @@ class GForms(commands.Cog):
 				if "hours" in task:
 					update = {"$set": {"since": now, "when": task["when"] + datetime.timedelta(hours=task["hours"])}}
 				else:
-					update = {"$set": {"since": now, "when": await get_time(task["when"])}}
+					update = {"$set": {"since": now, "when": await get_time(task["time"])}}
 
 				while True:
 					if responses := await aiog.as_service_account(
