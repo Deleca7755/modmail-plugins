@@ -1,4 +1,4 @@
-[Plugins](https://github.com/modmail-dev/modmail/wiki/Plugins) for the Discord Modmail bot.
+[Plugins](https://docs.modmail.dev/old-docs/plugins) for the Discord Modmail bot.
 
 ### Plugins
 See each plugin directory for their description.
