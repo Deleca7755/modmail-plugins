@@ -4,6 +4,7 @@ from typing import Union
 import aiofiles
 import discord
 from aiofiles import os
+from discord import http
 from discord.ext import commands
 
 from bot import ModmailBot, checks
@@ -50,81 +51,102 @@ class FileSave(commands.Cog):
 
 	def __init__(self, bot):
 		self.bot: ModmailBot = bot
-		self.attachments_channel = self.bot.log_channel
-		self.threads = None
-		self.db: motor.core.AgnosticCollection = bot.api.get_plugin_partition(self)
-
-	async def cog_unload(self):
-		if await os.path.exists("./temp/filesave/"):
-			await os.rmdir("./temp/filesave/")
+		self.attachments_channel = None
+		self.db = bot.api.get_plugin_partition(self)
+		self.threads = []
 
 	async def cog_load(self):
-		if not await os.path.exists("./temp/filesave/"):
-			await os.mkdir("./temp/filesave/")
 		if config := await self.db.find_one({"_id": "filesave"}):
-			try:
-				self.attachments_channel = self.bot.get_channel(int(config["attachments_channel"]))
-			except TypeError:
-				pass
-			self.threads = config["threads"]
+			if channel := self.bot.get_channel(config["channel"]):
+				self.attachments_channel = channel
+			else:
+				await self.fs_error("The set channel seems to no longer exist...\nIt will be changed back to the log channel.")
+				self.attachments_channel = self.bot.log_channel
+				await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": self.bot.log_channel.id}})
 		else:
-			await self.db.insert_one({"_id": "filesave", "attachments_channel": None, "threads": []})
+			self.attachments_channel = self.bot.log_channel
 
-	async def savefile(self, message: discord.Message, channel: str):
-		for att in message.attachments:
-			async with self.bot.session.get(att.url) as resp:
-				file = await resp.read()
-				if "image" in att.content_type:
-					with io.BytesIO(file) as img:
-						msg = await self.attachments_channel.send(file=discord.File(img, att.filename))
-				else:
-					path = f"./temp/filesave/{att.filename}"
-					async with aiofiles.open(path, mode="wb") as f:
-						await f.write(file)
-						msg = await self.attachments_channel.send(file=discord.File(path))
-					await os.remove(path)
-			await self.bot.db["logs"].update_one(
-				{"channel_id": channel},
-				{"$set": {"messages.$[].attachments.$[x].url": msg.attachments[0].url}},
-				array_filters=[{"x.url": att.url}],
-			)
+	async def fs_error(self, text: str):
+		await self.bot.log_channel.send(embed=discord.Embed(title="FileSave", description=text, color=self.bot.error_color))
+
+	async def send_file(self, file, filename=None, image: bool = False):
+		try:
+			msg = await self.attachments_channel.send(file=discord.File(file, filename))
+		except (discord.http.Forbidden, discord.http.NotFound) as e:
+			if isinstance(e, discord.http.Forbidden):
+				await self.fs_error(
+					"The bot seems to have lost a needed permission for the set channel...\nIt will be changed back to the log channel."
+				)
+			else:
+				await self.fs_error("The set channel seems to no longer exist...\nIt will be changed back to the log channel.")
+			if image:
+				file.seek(0)
+			self.attachments_channel = self.bot.log_channel
+			await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": self.bot.log_channel.id}})
+			msg = await self.attachments_channel.send(file=discord.File(file, filename))
+		return msg
+
+	async def save_file(self, message: discord.Message, thread: int):
+		async with aiofiles.tempfile.TemporaryDirectory(dir=".\\temp") as tempdir:
+			for att in message.attachments:
+				async with self.bot.session.get(att.url) as resp:
+					file = await resp.read()
+					if att.content_type and "image" in att.content_type:
+						msg = await self.send_file(io.BytesIO(file), att.filename, image=True)
+					else:
+						path = f"{tempdir}\\{att.filename}"
+						async with aiofiles.open(path, mode="wb") as f:
+							await f.write(file)
+						msg = await self.send_file(path)
+				await self.bot.db["logs"].update_one(
+					{"channel_id": str(thread)},
+					{"$set": {"messages.$[].attachments.$[x].url": msg.attachments[0].url}},
+					array_filters=[{"x.url": att.url}],
+				)
 
 	@commands.Cog.listener()
 	async def on_message(self, message: discord.Message):
+		if not self.threads and self.bot._started:
+			self.threads = [self.bot.threads.cache[thread].channel.id for thread in self.bot.threads.cache]
 		if message.channel.id in self.threads and message.author.id != self.bot.user.id and message.attachments:
-			await self.savefile(message, str(message.channel.id))
+			await self.save_file(message, message.channel.id)
 
 	@commands.Cog.listener()
 	async def on_thread_ready(self, thread, creator, category, initial_message):
-		self.db.update_one({"_id": "filesave"}, {"$push": {"threads": thread.channel.id}}, upsert=True)
 		self.threads.append(thread.channel.id)
 
 	@commands.Cog.listener()
 	async def on_thread_close(self, thread, closer, silent, delete_channel, message, scheduled):
-		self.db.update_one({"_id": "filesave"}, {"$pull": {"threads": thread.channel.id}})
-		self.threads.remove(thread.channel.id)
+		self.threads.pop(thread.channel.id)
 
 	@commands.group(name="filesave", aliases=["fs"], brief="FileSave commands.")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
 	async def filesave(self, ctx):
-		"""`FileSave` aims to help moderators who need to perserve files they send in threads.\n
-		Whenever a mod replies to a thread and their reply has attachments, they are sent to another channel by the bot.\n
+		"""`FileSave` aims to help moderators who want to perserve files they send in threads.\n
+		Whenever a message with attachments is sent in a thread, the attachments are sent again in another channel by the bot.\n
 		It works out of the box; by default files are sent to the **logging channel**, but the channel can be customized.\n
 		Archived files will also have their url updated in the database logs.
 		"""
 
 	@filesave.command(brief="Set the file archive channel.")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
-	async def setchannel(self, ctx, channel_id):
-		"""Set the file archive channel. It is the log channel by default."""
-		try:
-			channel_id = int(channel_id)
-		except ValueError:
-			await self.bot.add_reaction(ctx.message, "❌")
+	async def setchannel(self, ctx, channel: Union[int, discord.TextChannel]):
+		"""Set the file archive channel. It is the log channel by default. You can pass an actual channel or just its ID."""
+		if not isinstance(channel, discord.TextChannel):
+			try:
+				channel = int(channel)
+			except ValueError:
+				return await self.bot.add_reaction(ctx.message, "❌")
+			else:
+				self.attachments_channel = self.bot.get_channel(channel)
+				await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": channel}}, upsert=True)
 		else:
-			self.attachments_channel = self.bot.get_channel(channel_id)
-			await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": channel.id}})
-			await self.bot.add_reaction(ctx.message, "✅")
+			if channel.permissions_for(ctx.guild.me).view_channel and channel.permissions_for(ctx.guild.me).send_messages:
+				self.attachments_channel = channel
+				await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": channel.id}}, upsert=True)
+				await self.bot.add_reaction(ctx.message, "✅")
+			else:
+				await ctx.send("Invalid permissions for that channel!...")
 
 	class ArchiveChannelFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
 		limit: Union[int, None] = commands.flag(name="limit", aliases=["lim"], description="Only this amount of messages")
@@ -133,8 +155,8 @@ class FileSave(commands.Cog):
 		after: Union[int, None] = commands.flag(name="after", description="Before this message")
 
 	@filesave.command(brief="Save all attachments in a channel.")
-	@checks.thread_only()
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
+	@checks.thread_only()
 	async def archivethread(self, ctx: discord.ext.commands.Context, *, flags: ArchiveChannelFlags = None):
 		"""Itrates a thread's message history and archives files sent.
 		### Flags
@@ -148,10 +170,9 @@ class FileSave(commands.Cog):
 			counter = 0
 		else:
 			counter = None
-		channel = str(ctx.channel.id)
 		if not flags:
 			if not await confirmation(
-					ctx, "This will post **every** attachment in this channel in your designated archive channel. Are you sure?"
+				ctx, "This will post **every** attachment in this channel in your designated archive channel. Are you sure?"
 			):
 				return
 		async for msg in ctx.channel.history(
@@ -164,7 +185,7 @@ class FileSave(commands.Cog):
 			if msg.attachments:
 				if counter is not None:
 					counter += 1
-				await self.savefile(msg, channel)
+				await self.save_file(msg, ctx.channel.id)
 		await self.bot.add_reaction(ctx.message, "✅")
 
 
