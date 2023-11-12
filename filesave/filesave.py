@@ -2,6 +2,7 @@ import io
 from typing import Union
 
 import aiofiles
+import asyncio
 import discord
 from discord import http
 from discord.ext import commands
@@ -55,6 +56,7 @@ class FileSave(commands.Cog):
 		self.threads = []
 
 	async def cog_load(self):
+		await self.bot.threads.populate_cache()
 		if config := await self.db.find_one({"_id": "filesave"}):
 			if channel := self.bot.get_channel(config["channel"]):
 				self.attachments_channel = channel
@@ -64,6 +66,7 @@ class FileSave(commands.Cog):
 				await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": self.bot.log_channel.id}})
 		else:
 			self.attachments_channel = self.bot.log_channel
+		self.threads = [self.bot.threads.cache[thread].channel.id for thread in self.bot.threads.cache]
 
 	async def fs_error(self, text: str):
 		await self.bot.log_channel.send(embed=discord.Embed(title="FileSave", description=text, color=self.bot.error_color))
@@ -105,8 +108,6 @@ class FileSave(commands.Cog):
 
 	@commands.Cog.listener()
 	async def on_message(self, message: discord.Message):
-		if not self.threads and self.bot._started:
-			self.threads = [self.bot.threads.cache[thread].channel.id for thread in self.bot.threads.cache]
 		if message.channel.id in self.threads and message.author.id != self.bot.user.id and message.attachments:
 			await self.save_file(message, message.channel.id)
 
