@@ -143,9 +143,9 @@ class FileSave(commands.Cog):
 			if channel.permissions_for(ctx.guild.me).view_channel and channel.permissions_for(ctx.guild.me).send_messages:
 				self.attachments_channel = channel
 				await self.db.find_one_and_update({"_id": "filesave"}, {"$set": {"channel": channel.id}}, upsert=True)
-				await self.bot.add_reaction(ctx.message, "✅")
 			else:
-				await ctx.send("Invalid permissions for that channel!...")
+				return await ctx.send("Invalid permissions for that channel!...")
+		return await self.bot.add_reaction(ctx.message, "✅")
 
 	class ArchiveChannelFlags(commands.FlagConverter, case_insensitive=True, delimiter=" ", prefix="-"):
 		limit: Union[int, None] = commands.flag(name="limit", aliases=["lim"], description="Only this amount of messages")
