@@ -3,7 +3,6 @@ from typing import Union
 
 import aiofiles
 import discord
-from aiofiles import os
 from discord import http
 from discord.ext import commands
 
