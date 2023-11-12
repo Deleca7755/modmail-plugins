@@ -116,7 +116,7 @@ class FileSave(commands.Cog):
 
 	@commands.Cog.listener()
 	async def on_thread_close(self, thread, closer, silent, delete_channel, message, scheduled):
-		self.threads.pop(thread.channel.id)
+		self.threads.remove(thread.channel.id)
 
 	@commands.group(name="filesave", aliases=["fs"], brief="FileSave commands.")
 	@checks.has_permissions(checks.PermissionLevel.ADMIN)
