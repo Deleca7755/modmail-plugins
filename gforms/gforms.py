@@ -794,7 +794,7 @@ class GForms(commands.Cog):
 						description="\n".join(
 							[
 								f"- **Form**: {watch['form_title']} (`{watch['form_id']}`)\n - **Channel**: <#{watch['channel_id']}>"
-								f" (`{watch['channel_id']}`)\n - **Time**: {watch['time']}"
+								f" (`{watch['channel_id']}`)\n - **Next run**: {watch['when']}"
 								for watch in li
 							]
 						)
